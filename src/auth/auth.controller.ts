@@ -6,9 +6,12 @@ import {
   Query,
   Req,
   UseGuards,
+  UsePipes,
+  ValidationPipe,
+  BadRequestException,
 } from '@nestjs/common';
 import { AuthService } from './auth.service';
-import { AuthDto } from './dto/auth.dto';
+import { AuthDto, ResetPasswordDto, SignupDto, LoginDto } from './dto/auth.dto';
 import { Request } from 'express';
 import { AuthGuard } from '../auth/guards/auth.guard';
 
@@ -17,26 +20,37 @@ export class AuthController {
   constructor(private authService: AuthService) {}
 
   @Post('signup')
-  signup(@Body() dto: AuthDto) {
+  @UsePipes(new ValidationPipe({ whitelist: true }))
+  async signup(@Body() dto: SignupDto) {
+    if (dto.password !== dto.confirmPassword) {
+      throw new BadRequestException('Passwords do not match');
+    }
     return this.authService.signup(dto);
   }
 
   @Post('login')
-  login(@Body() dto: AuthDto) {
+  @UsePipes(new ValidationPipe({ whitelist: true }))
+  login(@Body() dto: LoginDto) {
     return this.authService.login(dto);
   }
 
   @Post('forgot-password')
+  @UsePipes(new ValidationPipe({ whitelist: true }))
   forgot(@Body('email') email: string) {
     return this.authService.forgotPassword(email);
   }
 
   @Post('reset-password')
-  reset(@Query('token') token: string, @Body('password') password: string) {
-    return this.authService.resetPassword(token, password);
+  @UsePipes(new ValidationPipe({ whitelist: true }))
+  reset(@Query('token') token: string, @Body() dto: ResetPasswordDto) {
+    return this.authService.resetPassword(token, dto.password);
   }
 
-  // ✅ Protected route to get logged-in user info
+  @Get('verify-email')
+  async verifyEmail(@Query('token') token: string) {
+    return this.authService.verifyEmail(token);
+  }
+
   @Get('me')
   @UseGuards(AuthGuard)
   getMe(@Req() req: Request) {

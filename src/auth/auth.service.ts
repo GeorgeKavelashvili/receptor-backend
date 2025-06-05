@@ -6,7 +6,7 @@ import {
 import { PrismaService } from '../prisma/prisma.service';
 import * as bcrypt from 'bcrypt';
 import { JwtService } from '@nestjs/jwt';
-import { AuthDto } from './dto/auth.dto';
+import { AuthDto, SignupDto, LoginDto } from './dto/auth.dto';
 import * as crypto from 'crypto';
 import * as nodemailer from 'nodemailer';
 import { ConfigService } from '@nestjs/config';
@@ -16,7 +16,7 @@ export class AuthService {
   constructor(
     private prisma: PrismaService,
     private jwt: JwtService,
-    private config: ConfigService, // Inject ConfigService here
+    private config: ConfigService,
   ) {}
 
   async hash(password: string) {
@@ -27,23 +27,57 @@ export class AuthService {
     return await bcrypt.compare(password, hash);
   }
 
-  async signup(dto: AuthDto) {
+  async signup(dto: SignupDto) {
+    const hashedPassword = await this.hash(dto.password);
+    const emailToken = crypto.randomBytes(32).toString('hex');
+    const emailTokenExp = new Date(Date.now() + 1000 * 60 * 60); // 1 hour
+
     const user = await this.prisma.user.create({
       data: {
         email: dto.email,
-        password: await this.hash(dto.password),
+        password: hashedPassword,
+        firstName: dto.firstName,
+        lastName: dto.lastName,
+        username: dto.username,
+        phone: dto.phone,
+        emailVerifyToken: emailToken,
+        emailVerifyTokenExp: emailTokenExp,
       },
     });
-    return this.signToken(user.id, user.email);
+
+    // Send verification email
+    const transporter = nodemailer.createTransport({
+      service: 'gmail',
+      auth: {
+        user: process.env.EMAIL_USER,
+        pass: process.env.EMAIL_PASS,
+      },
+    });
+
+    await transporter.sendMail({
+      to: dto.email,
+      subject: 'Receptor Email Verification',
+      html: `<a href="http://localhost:3000/auth/verify-email?token=${emailToken}">Verify Email</a>`,
+    });
+
+    return { message: 'Signup successful, please verify your email' };
   }
 
-  async login(dto: AuthDto) {
-    const user = await this.prisma.user.findUnique({
-      where: { email: dto.email },
+  async login(dto: LoginDto) {
+    const user = await this.prisma.user.findFirst({
+      where: {
+        OR: [{ email: dto.identifier }, { phone: dto.identifier }],
+      },
     });
+
     if (!user || !(await this.compare(dto.password, user.password))) {
       throw new ForbiddenException('Incorrect credentials');
     }
+
+    if (!user.isVerified) {
+      throw new ForbiddenException('Please verify your email first.');
+    }
+
     return this.signToken(user.id, user.email);
   }
 
@@ -53,6 +87,7 @@ export class AuthService {
 
     const token = crypto.randomBytes(32).toString('hex');
     const expires = new Date(Date.now() + 1000 * 60 * 15); // 15 min
+
     await this.prisma.user.update({
       where: { email },
       data: { resetToken: token, resetTokenExp: expires },
@@ -84,6 +119,7 @@ export class AuthService {
         },
       },
     });
+
     if (!user) throw new ForbiddenException('Token invalid or expired');
 
     const hashed = await this.hash(newPassword);
@@ -97,6 +133,30 @@ export class AuthService {
     });
 
     return { message: 'Password reset successfully' };
+  }
+
+  async verifyEmail(token: string) {
+    const user = await this.prisma.user.findFirst({
+      where: {
+        emailVerifyToken: token,
+        emailVerifyTokenExp: {
+          gte: new Date(),
+        },
+      },
+    });
+
+    if (!user) throw new ForbiddenException('Token invalid or expired');
+
+    await this.prisma.user.update({
+      where: { id: user.id },
+      data: {
+        isVerified: true,
+        emailVerifyToken: null,
+        emailVerifyTokenExp: null,
+      },
+    });
+
+    return { message: 'Email verified successfully' };
   }
 
   signToken(id: string, email: string) {
