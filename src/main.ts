@@ -10,3 +10,5 @@ async function bootstrap() {
   await app.listen(3000);
 }
 bootstrap();
+//npx prisma studio database
+//npx run start:dev start:3000
